@@ -1,16 +1,18 @@
 # 数据构建
 import math
+import random
+
 import torch
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data as Data
+import torchvision
+from classes.dataset.Dataset import *
+from classes.dataset.Generator import *
+from classes.Vocabulary import *
 
-from pix2code_trasformer.classes.dataset.Dataset import *
-from pix2code_trasformer.classes.dataset.Generator import *
-from pix2code_trasformer.classes.Vocabulary import *
-
-CONTEXT_LENGTH = 48
+CONTEXT_LENGTH = 128
 IMAGE_SIZE = 256
 BATCH_SIZE = 64
 EPOCHS = 3
@@ -21,96 +23,53 @@ epochs = 100
 device = 'cuda'
 
 
-if __name__ == '__main__':
+def main():
     np.random.seed(1234)
-    input_path = ""
-    output_path = ""
+    input_path = "./data/web/all_data"
+    output_path = "./data/web/out"
+
     dataset = Dataset()
     # 将所有的gui数据和图片数据存入内存中 构建了 DataSet() Vocabulary() 对象  对象有有 图片 序列  预测值
-    dataset.load(input_path, generate_binary_sequences=True)
+    dataset.load(input_path, generate_binary_sequences=False)
     dataset.save_metadata(output_path)
     dataset.voc.save(output_path)
-
-    is_memory_intensive = False
-    if not is_memory_intensive:
-        dataset.convert_arrays()
-
-        input_shape = dataset.input_shape
-        output_size = dataset.output_size
-
-        print("总图片数量{},总序列数量{},预测词数量{}".format(len(dataset.input_images), len(dataset.partial_sequences), len(dataset.next_words)))
-        print("图片的形状{},序列的形状{},预测词的形状{}".format(dataset.input_images.shape, dataset.partial_sequences.shape, dataset.next_words.shape))
-    else:
-        gui_paths, img_paths = Dataset.load_paths_only(input_path)
-
-        input_shape = dataset.input_shape
-        output_size = dataset.output_size
-        steps_per_epoch = dataset.size / BATCH_SIZE
-
-        voc = Vocabulary()
-        voc.retrieve(output_path)
-        # 内存小的时候 generator 通过 yield可以按顺序每次获取图片信息
-        generator = Generator.data_generator(voc, gui_paths, img_paths, batch_size=BATCH_SIZE, generate_binary_sequences=True)
-
-    sentences = [
-        # 德语和英语的单词个数不要求相同
-        # enc_input                dec_input           dec_output
-        ['ich mochte ein bier P', 'S i want a beer .', 'i want a beer . E'],
-        ['ich mochte ein cola P', 'S i want a coke .', 'i want a coke . E']
-    ]
-
-    src_vocab = {'P': 0, 'ich': 1, 'mochte': 2, 'ein': 3, 'bier': 4, 'cola': 5}
-    src_idx2word = {i: w for i, w in enumerate(src_vocab)}
-    src_vocab_size = len(src_vocab)
-
-    tgt_vocab = {'P': 0, 'i': 1, 'want': 2, 'a': 3, 'beer': 4, 'coke': 5, 'S': 6, 'E': 7, '.': 8}
-    idx2word = {i: w for i, w in enumerate(tgt_vocab)}
-    tgt_vocab_size = len(tgt_vocab)
-
+    src_vocab_size = tgt_vocab_size = len(dataset.voc.vocabulary)
     src_len = CONTEXT_LENGTH  # 输入序列最大长度
     tgt_len = CONTEXT_LENGTH  # 输出序列最大长度
 
     # 模型参数
+    d_lan_encoder_model = 256
     d_model = 512  # embedding 维度
     d_ff = 2048  # FeedForward dimension 前馈神经网络 提取特征
     d_k = d_v = 64  # Q K两个矩阵的维度
     n_layers = 6  # encoder和decode的层数
     n_heads = 8  # 多头的个数
 
+    def make_data():
+        enc_inputs = dataset.partial_sequences
+        dec_inputs = dataset.partial_sequences
+        dec_outputs = dataset.dec_out_sequences
+        return enc_inputs, dec_inputs, dec_outputs, dataset.input_images
+        # return torch.LongTensor(np.array(enc_inputs)), torch.LongTensor(np.array(dec_inputs)), torch.LongTensor(
+        #     np.array(dec_outputs)), torch.tensor(np.array(dataset.input_images), dtype=torch.float)
 
-    def make_data(sentences):
-        enc_inputs, dec_inputs, dec_outputs = [], [], []
-        for i in range(len(sentences)):
-            enc_input = [[src_vocab[n] for n in sentences[i][0].split()]]
-            dec_input = [[tgt_vocab[n] for n in sentences[i][1].split()]]
-            dec_output = [[tgt_vocab[n] for n in sentences[i][2].split()]]
-
-            enc_inputs.extend(enc_input)
-            dec_inputs.extend(dec_input)
-            dec_outputs.extend(dec_output)
-
-        return torch.LongTensor(enc_inputs), torch.LongTensor(dec_inputs), torch.LongTensor(dec_outputs)
-
-
-    enc_inputs, dec_inputs, dec_outputs = make_data(sentences)
-
+    enc_inputs, dec_inputs, dec_outputs, images = make_data()
 
     class MyDataSet(Data.Dataset):
-        def __init__(self, enc_inputs, dec_inputs, dec_outputs):
+        def __init__(self, enc_inputs, dec_inputs, dec_outputs, images):
             super(MyDataSet, self).__init__()
             self.enc_inputs = enc_inputs
             self.dec_inputs = dec_inputs
             self.dec_outputs = dec_outputs
+            self.images = images
 
         def __len__(self):
-            return self.enc_inputs.shape[0]
+            return len(self.enc_inputs)
 
         def __getitem__(self, idx):
-            return self.enc_inputs[idx], self.dec_inputs[idx], self.dec_outputs[idx]
+            return self.enc_inputs[idx], self.dec_inputs[idx], self.dec_outputs[idx], self.images[idx]
 
-
-    loader = Data.DataLoader(MyDataSet(enc_inputs, dec_inputs, dec_outputs))
-
+    loader = Data.DataLoader(MyDataSet(enc_inputs, dec_inputs, dec_outputs, images), batch_size=5, shuffle=True)
 
     class PositionalEncoding(nn.Module):  # transformer模型
         def __init__(self, d_model, drop_out=0.1, max_len=5000):
@@ -134,7 +93,6 @@ if __name__ == '__main__':
             x = x + self.pe[:x.size(0), :]  # self.pe[:x.size(0), :] 维度为 5*1*512
             return self.dropout(x)
 
-
     def get_attn_pad_mask(seq_q, seq_k):  # [2,5] [2,5]
         """这里的q,k表示的是两个序列（跟注意力机制的q,k没有关系），例如encoder_inputs (x1,x2,..xm)和encoder_inputs (x1,x2..xm)
             encoder和decoder都可能调用这个函数，所以seq_len视情况而定
@@ -151,7 +109,6 @@ if __name__ == '__main__':
         pad_attn_mask = seq_k.data.eq(0).unsqueeze(1)  # 增加维度   squeeze：降低维度
         return pad_attn_mask.expand(batch_size, len_q, len_k)  # 2*5*5
 
-
     def get_attn_subsequence_mask(seq):
         """建议打印出来看看是什么的输出（一目了然）
            seq: [batch_size, tgt_len]
@@ -160,7 +117,6 @@ if __name__ == '__main__':
         subsequence_mask = np.triu(np.ones(attn_shape))  # 生成上三角矩阵
         subsequence_mask = torch.from_numpy(subsequence_mask).byte()
         return subsequence_mask  # [batch_size, tgt_len, tgt_len]
-
 
     class ScaleDotProductAttention(nn.Module):
         def __init__(self):
@@ -179,7 +135,6 @@ if __name__ == '__main__':
             attn = nn.Softmax(dim=-1)(scores)  # 对最后一个维度做softmax 最后一个维度 softmax的和为1
             context = torch.matmul(attn, V)  # [batch_size, n_heads, len_q, len_k]   [batch_size, n_heads, len_k, d_v]
             return context, attn
-
 
     class MultiHeadAttention(nn.Module):
         """这个Attention类可以实现:
@@ -231,7 +186,6 @@ if __name__ == '__main__':
             out_put = self.fc(context)  # [batch_size, n_heads, len_q, len_k] -> (n_heads * d_v, d_model)
             return nn.LayerNorm(d_model).to(device)(out_put + residual), attn
 
-
     class PoswiseFeedForwardNet(nn.Module):
         def __init__(self):
             super(PoswiseFeedForwardNet, self).__init__()
@@ -249,14 +203,13 @@ if __name__ == '__main__':
             out_put = self.fc(inputs)
             return nn.LayerNorm(d_model).to(device)(out_put + residual)
 
-
     class EncoderLayer(nn.Module):
         def __init__(self):
             super(EncoderLayer, self).__init__()
             self.enc_self_attn = MultiHeadAttention()
             self.pos_ffn = PoswiseFeedForwardNet()
 
-        def forward(self, enc_inputs, enc_self_attn_mask):
+        def forward(self, enc_input, enc_self_attn_mask):
             """
             enc_inputs: [batch_size,sec_len,d_model]
             enc_self_attn_mask:[batch_size,src_len,src_len] mask矩阵(pad_mask or sequence mask)
@@ -265,14 +218,13 @@ if __name__ == '__main__':
             :return:
             """
             # enc_outputs: [batch_size, src_len, d_model], attn: [batch_size, n_heads, src_len, src_len]
-            # 第一个enc_inputs * W_Q = Q
-            # 第二个enc_inputs * W_K = K
-            # 第三个enc_inputs * W_V = V
-            enc_outputs, attn = self.enc_self_attn(enc_inputs
-                                                   , enc_inputs, enc_inputs, enc_self_attn_mask)
+            # 第一个enc_input * W_Q = Q
+            # 第二个enc_input * W_K = K
+            # 第三个enc_input * W_V = V
+            enc_outputs, attn = self.enc_self_attn(enc_input
+                                                   , enc_input, enc_input, enc_self_attn_mask)
             enc_outputs = self.pos_ffn(enc_outputs)
             return enc_outputs, attn
-
 
     class DecoderLayer(nn.Module):
         def __init__(self):
@@ -300,27 +252,43 @@ if __name__ == '__main__':
             dec_outputs = self.pos_ffn(dec_outputs)
             return dec_outputs, dec_self_attn, dec_enc_attn
 
+    class ResNet(nn.Module):
+        def __init__(self):
+            super(ResNet, self).__init__()
+            self.resnet = torchvision.models.resnet50(pretrained=False)
+            self.fc = nn.Linear(10000, 256)
+
+        def forward(self, x):
+            x = self.resnet(x)
+            x = self.fc(x)
+            return x
+
+    img_model = ResNet().to(device)
 
     class Encoder(nn.Module):
         def __init__(self):
             super(Encoder, self).__init__()
-            self.src_emb = nn.Embedding(src_vocab_size, d_model)
-            self.pos_emb = PositionalEncoding(d_model)
+            self.src_emb = nn.Embedding(src_vocab_size, d_lan_encoder_model)
+            self.pos_emb = PositionalEncoding(d_lan_encoder_model)
             self.layers = nn.ModuleList([EncoderLayer() for _ in range(n_layers)])
 
-        def forward(self, enc_inputs):
+        def forward(self, enc_input, image):
             """
-            enc_inputs:[batch_size,src_len]
+            enc_input:[batch_size,src_len]
 
-            :param enc_inputs:
+            :param enc_input:
             :return:
             """
             # [batch_size, src_len, d_model]
-            enc_outputs = self.src_emb(enc_inputs)
-            enc_outputs = self.pos_emb(enc_outputs.transpose(0, 1).transpose(0, 1))
+            enc_output = self.src_emb(enc_input)
+            enc_output = self.pos_emb(enc_output.transpose(0, 1).transpose(0, 1))
+
+            img_input = img_model(image)
+            img_input = img_input.unsqueeze(1).repeat(1, CONTEXT_LENGTH, 1)
+            rel_output = torch.cat((enc_output, img_input), dim=2)
             # Encoder输入序列的pad mask矩阵
             # [batch_size, src_len, src_len]
-            enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
+            enc_self_attn_mask = get_attn_pad_mask(enc_input, enc_input)
             #  在计算中不需要用到，它主要用来保存你接下来返回的attention的值（这个主要是为了你画热力图等，用来看各个词之间的关系
             enc_self_attns = []
             for layer in self.layers:  # for循环访问nn.ModuleList对象
@@ -328,10 +296,9 @@ if __name__ == '__main__':
                 # enc_outputs: [batch_size, src_len, d_model],
                 # enc_self_attn: [batch_size, n_heads, src_len, src_len]
                 # 传入的enc_outputs其实是input，传入mask矩阵是因为你要做self attention
-                enc_outs, enc_self_attn = layer(enc_outputs, enc_self_attn_mask)
+                enc_out, enc_self_attn = layer(rel_output, enc_self_attn_mask)
                 enc_self_attns.append(enc_self_attn)
-                return enc_outs, enc_self_attns
-
+                return enc_out, enc_self_attns
 
     class Decoder(nn.Module):
         def __init__(self):
@@ -374,7 +341,6 @@ if __name__ == '__main__':
                 # dec_outputs: [batch_size, tgt_len, d_model]
             return dec_outputs, dec_self_attns, dec_enc_attns
 
-
     class Transformer(nn.Module):
         def __init__(self):
             super(Transformer, self).__init__()
@@ -382,7 +348,7 @@ if __name__ == '__main__':
             self.decoder = Decoder().to(device)
             self.projection = nn.Linear(d_model, tgt_vocab_size, bias=False)
 
-        def forward(self, enc_inputs, dec_inputs):
+        def forward(self, enc_input, dec_input, image):
             """Transformers的输入：两个序列
                     enc_inputs: [batch_size, src_len]
                     dec_inputs: [batch_size, tgt_len]
@@ -392,38 +358,46 @@ if __name__ == '__main__':
 
             # enc_outputs: [batch_size, src_len, d_model], enc_self_attns: [n_layers, batch_size, n_heads, src_len, src_len]
             # 经过Encoder网络后，得到的输出还是[batch_size, src_len, d_model]
-            enc_outputs, enc_self_attns = self.encoder(enc_inputs)
+            enc_output, enc_self_attns = self.encoder(enc_input, image)
             # dec_outputs: [batch_size, tgt_len, d_model], dec_self_attns: [n_layers, batch_size, n_heads, tgt_len, tgt_len], dec_enc_attn: [n_layers, batch_size, tgt_len, src_len]
-            dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(dec_inputs, enc_inputs, enc_outputs)
+            dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(dec_input, enc_input, enc_output)
             # dec_outputs: [batch_size, tgt_len, d_model] -> dec_logits: [batch_size, tgt_len, tgt_vocab_size]
             dec_logits = self.projection(dec_outputs)
             return dec_logits.view(-1, dec_logits.size(-1)), enc_self_attns, dec_self_attns, dec_enc_attns
 
-
     model = Transformer().to(device)
     # 这里的损失函数里面设置了一个参数 ignore_index=0，因为 "pad" 这个单词的索引为 0，这样设置以后，就不会计算 "pad" 的损失（因为本来 "pad" 也没有意义，不需要计算）
+    # criterion = nn.CrossEntropyLoss(ignore_index=0)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
+
+    # 梯度选择
     optimizer = optim.SGD(model.parameters(), lr=1e-3, momentum=0.99)
 
     for epoch in range(epochs):
-        for enc_inputs, dec_inputs, dec_outputs in loader:
+        for enc_input, dec_input, dec_output, image in loader:
             """
-                    enc_inputs: [batch_size, src_len]
-                    dec_inputs: [batch_size, tgt_len]
-                    dec_outputs: [batch_size, tgt_len]
+                    enc_input: [batch_size, src_len]
+                    dec_input: [batch_size, tgt_len]
+                    dec_output: [batch_size, tgt_len]
+                    image: [3, 3, 224]
                     """
-            enc_inputs, dec_inputs, dec_outputs = enc_inputs.to(device), dec_inputs.to(device), dec_outputs.to(
-                device)
+            enc_input, dec_input, dec_output, image = torch.LongTensor(np.array(enc_input)), torch.LongTensor(
+                np.array(dec_input)), torch.LongTensor(
+                np.array(dec_output)), torch.tensor(np.array(image), dtype=torch.float)
+            enc_input, dec_input, dec_output, image = enc_input.to(device), dec_input.to(device), dec_output.to(
+                device), image.to(device)
             # outputs: [batch_size * tgt_len, tgt_vocab_size]
-            outputs, enc_self_attns, dec_self_attns, dec_enc_attns = model(enc_inputs, dec_inputs)
-            loss = criterion(outputs,
-                             dec_outputs.view(-1))  # dec_outputs.view(-1):[batch_size * tgt_len * tgt_vocab_size]
+            output, enc_self_attns, dec_self_attns, dec_enc_attns = model(enc_input, dec_input, image)
+            pred, idx = output.max(1)
+            # print(idx)
+            # print(dec_output)
+            loss = criterion(output,
+                             dec_output.view(-1))  # dec_outputs.view(-1):[batch_size * tgt_len * tgt_vocab_size]
             print('Epoch:', '%04d' % (epoch + 1), 'loss =', '{:.6f}'.format(loss))
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
 
     def greedy_decoder(model, enc_input, start_symbol):
         """贪心编码
@@ -462,7 +436,6 @@ if __name__ == '__main__':
         greedy_dec_predict = dec_input[:, 1:]
         return greedy_dec_predict
 
-
     # ==========================================================================================
     # 预测阶段
     enc_inputs, _, _ = next(iter(loader))
@@ -471,3 +444,7 @@ if __name__ == '__main__':
         print(enc_inputs[i], '->', greedy_dec_predict.squeeze())
         print([src_idx2word[t.item()] for t in enc_inputs[i]], '->',
               [idx2word[n.item()] for n in greedy_dec_predict.squeeze()])
+
+
+if __name__ == '__main__':
+    main()

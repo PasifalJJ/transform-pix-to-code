@@ -16,9 +16,9 @@ class Vocabulary:
         self.token_lookup = {}  # 字典 位置对应的token ex{1,"btn"}
         self.size = 0  # 所有token的总数
 
+        self.append(PLACEHOLDER)
         self.append(START_TOKEN)
         self.append(END_TOKEN)
-        self.append(PLACEHOLDER)
 
     def append(self, token):
         if token not in self.vocabulary:

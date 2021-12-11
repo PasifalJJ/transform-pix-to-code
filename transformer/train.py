@@ -13,6 +13,9 @@ if __name__ == '__main__':
     # 训练次数
     epochs = 100
 
+    # 构建sentences
+
+
     sentences = [
         # 德语和英语的单词个数不要求相同
         # enc_input                dec_input           dec_output

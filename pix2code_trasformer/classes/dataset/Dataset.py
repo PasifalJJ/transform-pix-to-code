@@ -1,12 +1,12 @@
 from __future__ import print_function
+
 __author__ = 'jsc'
 
 import os
 
-from com.jsc.paper.classes.Vocabulary import *
-from com.jsc.paper.classes.Utils import *
-from com.jsc.paper.classes.model.Config import *
-
+from ..Vocabulary import *
+from ..Utils import *
+from ..model.Config import *
 
 class Dataset:
     def __init__(self):
@@ -23,6 +23,10 @@ class Dataset:
 
         self.voc = Vocabulary()
         self.size = 0
+        self.enc_inputs = []
+        self.dec_inputs = []
+        self.dec_outputs = []
+        self.dec_out_sequences = []
 
     @staticmethod
     def load_paths_only(path):
@@ -59,13 +63,18 @@ class Dataset:
                     img = np.load("{}/{}.npz".format(path, file_name))["features"]
                     self.append(file_name, gui, img)
 
+        print("数据数字化表示...")
+
         print("生成稀疏向量，数据向量化表示...")
         self.voc.create_binary_representation()  # 将voc中的token进行稀疏矩阵
-        self.next_words = self.sparsify_labels(self.next_words, self.voc)
         if generate_binary_sequences:
             self.partial_sequences = self.binarize(self.partial_sequences, self.voc)  # 将content(48)序列中的token稀疏化
+            self.dec_out_sequences = self.binarize(self.dec_out_sequences, self.voc)  # 将content(48)序列中的token稀疏化
+            self.next_words = self.sparsify_labels(self.next_words, self.voc)
         else:
             self.partial_sequences = self.indexify(self.partial_sequences, self.voc)  # 将content(48)序列中的token使用数字进行表示
+            self.dec_out_sequences = self.indexify(self.dec_out_sequences, self.voc)  # 将content(48)序列中的token使用数字进行表示
+            self.next_words = self.indexify_labels(self.next_words, self.voc)
 
         self.size = len(self.ids)
         assert self.size == len(self.input_images) == len(self.partial_sequences) == len(self.next_words)
@@ -91,26 +100,43 @@ class Dataset:
             pic = img * 255
             pic = np.array(pic, dtype=np.uint8)
             Utils.show(pic)
+        # 将 224*224*3 转变为 3*224*224
+        img = np.transpose(img, (2, 0, 1))
 
+        tem_enc_inputs = [START_TOKEN]
+        tem_dec_inputs = [START_TOKEN]
+        tem_dec_outputs = []
         token_sequence = [START_TOKEN]
         for line in gui:
-            line = line.replace(",", " ,").replace("\n", " \n")
+            line = line.replace(",", " ").replace("\n", " ")
+            line = ' '.join(line.split())
             tokens = line.split(" ")
             for token in tokens:
                 self.voc.append(token)
                 token_sequence.append(token)
+                tem_enc_inputs.append(token)
+                tem_dec_inputs.append(token)
+                tem_dec_outputs.append(token)
         token_sequence.append(END_TOKEN)
+        tem_dec_outputs.append(END_TOKEN)
+        self.enc_inputs.append(tem_enc_inputs)
+        self.dec_inputs.append(tem_dec_inputs)
+        self.dec_outputs.append(tem_dec_outputs)
 
-        suffix = [PLACEHOLDER] * CONTEXT_LENGTH
+        for j in range(len(tem_enc_inputs)):
+            pl = [PLACEHOLDER] * CONTEXT_LENGTH
+            pl[0:j+1] = tem_enc_inputs[0:j+1]
+            context = np.array(pl)
 
-        a = np.concatenate([suffix, token_sequence])
-        for j in range(0, len(a) - CONTEXT_LENGTH):
-            context = a[j:j + CONTEXT_LENGTH]
-            label = a[j + CONTEXT_LENGTH]
+            pl_out = [PLACEHOLDER] * CONTEXT_LENGTH
+            pl_out[0:j + 1] = tem_dec_outputs[0:j + 1]
+            dec_out_context = np.array(pl_out)
 
+            label = tem_dec_outputs[j]
             self.ids.append(sample_id)
             self.input_images.append(img)
             self.partial_sequences.append(context)
+            self.dec_out_sequences.append(dec_out_context)
             self.next_words.append(label)
 
     @staticmethod
@@ -140,6 +166,14 @@ class Dataset:
         temp = []
         for label in next_words:
             temp.append(voc.binary_vocabulary[label])
+
+        return temp
+
+    @staticmethod
+    def indexify_labels(next_words, voc):
+        temp = []
+        for label in next_words:
+            temp.append(voc.vocabulary[label])
 
         return temp
 
