@@ -10,22 +10,22 @@ from ..model.Config import *
 
 class Dataset:
     def __init__(self):
-        self.input_shape = None
-        self.output_size = None
         # 文件名称数组
         self.ids = []
-        # 归一化文件信息数组
+        self.enc_inputs = []
+        self.dec_inputs = []
+        self.dec_outputs = []
+        self.voc = Vocabulary()
         self.input_images = []
+
+        self.input_shape = None
+        self.output_size = None
         # 区间context(48)长度内的字符
         self.partial_sequences = []
         # context(48)字符后的下一个字符
         self.next_words = []
-
-        self.voc = Vocabulary()
         self.size = 0
-        self.enc_inputs = []
-        self.dec_inputs = []
-        self.dec_outputs = []
+        # 归一化文件信息数组
         self.dec_out_sequences = []
 
     @staticmethod

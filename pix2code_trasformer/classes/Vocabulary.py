@@ -1,7 +1,6 @@
-__author__ = 'Tony Beltramelli - www.tonybeltramelli.com'
-
 import sys
 import numpy as np
+import json
 
 START_TOKEN = "<START>"
 END_TOKEN = "<END>"
@@ -11,11 +10,10 @@ SEPARATOR = '->'
 
 class Vocabulary:
     def __init__(self):
-        self.binary_vocabulary = {}  # 字典 token对应的稀疏举证 ex：{"btn":"10000000000"}
-        self.vocabulary = {}  # 字典 token对应的位置 ex：{"btn":1}
-        self.token_lookup = {}  # 字典 位置对应的token ex{1,"btn"}
-        self.size = 0  # 所有token的总数
-
+        self.binary_vocabulary = {}                       # 字典 token对应的稀疏举证 ex：{"btn":"10000000000"}
+        self.vocabulary = {}                              # 字典 token对应的位置 ex：{"btn":1}
+        self.token_lookup = {}                            # 字典 位置对应的token ex{1,"btn"}
+        self.size = 0                                     # 所有token的总数
         self.append(PLACEHOLDER)
         self.append(START_TOKEN)
         self.append(END_TOKEN)
@@ -28,7 +26,7 @@ class Vocabulary:
 
     def create_binary_representation(self):
         if sys.version_info >= (3,):
-            items = self.vocabulary.items() # 此语法类似与java的entrySet功能
+            items = self.vocabulary.items()  # 此语法类似与java的entrySet功能
         else:
             items = self.vocabulary.iteritems()
         for key, value in items:
@@ -51,10 +49,28 @@ class Vocabulary:
         return string
 
     def save(self, path):
-        output_file_name = "{}/words.vocab".format(path)
-        output_file = open(output_file_name, 'w')
-        output_file.write(self.get_serialized_binary_representation())
-        output_file.close()
+        self.save_voc(path)
+        self.save_token_look_up(path)
+
+    def save_voc(self, path):
+        output_file_name = "{}/voc.vocab".format(path)
+        with open(output_file_name, 'w') as fp:
+            json.dump(self.vocabulary, fp)
+
+    def save_token_look_up(self, path):
+        output_file_name = "{}/token_lookup.vocab".format(path)
+        with open(output_file_name, 'w') as fp:
+            json.dump(self.token_lookup, fp)
+
+    def get_token_lookup(self, path):
+        output_file_name = "{}/token_lookup.vocab".format(path)
+        with open(output_file_name, 'r') as fp:
+            return json.load(fp)
+
+    def get_voc(self, path):
+        output_file_name = "{}/voc.vocab".format(path)
+        with open(output_file_name, 'r') as fp:
+            return json.load(fp)
 
     def retrieve(self, path):
         input_file = open("{}/words.vocab".format(path), 'r')
